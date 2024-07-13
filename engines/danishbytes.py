@@ -1,5 +1,5 @@
 # VERSION: 1.3                                                                    #
-# AUTHOR: github.com/444995 - the code will improve and get updated               #
+# AUTHOR: github.com/444995 - updates will come                                   #
 
 
 ###########################   LICENSING INFORMATION   ###############################
@@ -28,7 +28,7 @@
 PRIVATE_USERNAME = "REPLACE_ME"                           # A DANISHBYTES ACCOUNT HAS A PRIVATE USERNAME
 PUBLIC_USERNAME = "REPLACE_ME"                            # AND A PUBLIC USERNAME
 PASSWORD = "REPLACE_ME"                                   # YOU ALSO NEED A PASSWORD
-CACHE_LOGIN_COOKIES = True                                # CACHE COOKIES  (RECOMMENDED)
+CACHE_LOGIN_COOKIES = True                                # CACHE COOKIES (HIGHLY RECOMMENDED)
 COOKIES_FILE_NAME = "danishbytes.cookies"                 # THE PATH TO THE LOGIN 
 
 # ----------------IMPORTS-------------------------------- #
@@ -46,7 +46,7 @@ from urllib.error import HTTPError
 
 class HtmlExtractor:
     """
-    Extracts both content from HTML and cookies from responses.
+    Extracts needed keys and tokens from a given HTML response.
     """
     @staticmethod
     def extract_meta_content(soup, name):
@@ -82,28 +82,27 @@ class danishbytes(object):
     name = 'DanishBytes'
     user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0'
 
-    # categories will get implemented
     supported_categories = {
-        'all': '0',
-        'anime': '7',
-        'games': '2',
-        'movies': '6',
-        'music': '1',
-        'software': '3',
-        'tv': '4'
+        'all': '0', # 'all' is just every category combined
+        'movies': '1',
+        'tv': '2',
+        'music': '3',
+        'games': '4',
+        'software': '5',
+        'books': '8',
     }
 
     def __init__(self):
         """
         Initializes the DanishBytes engine for qBittorrent.
         """
-        self.site_url = danishbytes.url
-        self.login_url = f"{self.site_url}/login"
+        self.login_url = f"{self.url}/login"
         self.tracker_urls = [
             "https://danishbytes2.org/announce", 
             "https://dbytes.org/announce", 
             "https://danishbytes.club/announce"
         ]
+        self.categories_string = "&categories%5B%5D="
         
         self.cur_dir = os.path.dirname(os.path.realpath(__file__))
         self.cookies_file_path = os.path.join(self.cur_dir, COOKIES_FILE_NAME)
@@ -200,7 +199,7 @@ class danishbytes(object):
         """
         Verifies the login by checking if the csrf token is present in the site's main page.
         """
-        response = self._make_request(self.site_url)
+        response = self._make_request(self.url)
         soup = BeautifulSoup(response, "html.parser")
         csrf_token = self.html_extractor.extract_meta_content(soup, "csrf-token")
 
@@ -219,14 +218,15 @@ class danishbytes(object):
         """
         Processes search results and prints them.
         """
-        rss_key = search_results['rsskey']
+        # these shouldnt be defined each time, but for now it's fine
+        rss_key = search_results['rsskey'] 
         pass_key = search_results['passkey']
 
         def _make_magnet_url(torrent):
             magnet_url = "magnet:?"
             magnet_url += f"dn={torrent['name']}&"
             magnet_url += f"xt=urn:btih:{torrent['info_hash']}&"
-            magnet_url += f"as={self.site_url}/torrent/download/{torrent['id']}.{rss_key}&"
+            magnet_url += f"as={self.url}/torrent/download/{torrent['id']}.{rss_key}&"
             magnet_url += f"xl={torrent['size']}&"
             for tracker in self.tracker_urls:
                 magnet_url += f"tr={tracker}/{pass_key}&"
@@ -240,8 +240,8 @@ class danishbytes(object):
             size = torrent['size']
             seeders = torrent['seeders']
             leechers = torrent['leechers']
-            engine_url = self.site_url
-            desc_url = f"{self.site_url}/torrent/{torrent['id']}"
+            engine_url = self.url
+            desc_url = f"{self.url}/torrent/{torrent['id']}"
 
             # prettyprint isn't used because danishbytes gives size in bytes already
             print(f"{magnet_url}|{name}|{size}|{seeders}|{leechers}|{engine_url}|{desc_url}")
@@ -251,27 +251,31 @@ class danishbytes(object):
         return torrent_num
 
 
-    def search(self, what, cat='all'):
+    def search(self, query, cat='all'):
         """
         Searches for torrents on DanishBytes.
         """
+        if cat not in self.supported_categories:
+            raise ValueError("Unsupported category")
+        
+        if cat == 'all':
+            category_param = ''.join([self.categories_string + cat for cat in self.supported_categories.values()])
+        else:
+            category_param = self.categories_string + self.supported_categories[cat]
 
         page_num = 0
         while True:
             page_num += 1
-
-            req_url = f"{self.site_url}/torrents/filter?_token={self.csrf_token}&search={what}&search_not=&uploader=&imdb=&tvdb=&view=list&tmdb=&mal=&igdb=&size_min=0&size_max=0&year_min=&year_max=&categories%5B%5D=1&categories%5B%5D=2&categories%5B%5D=5&categories%5B%5D=4&categories%5B%5D=3&categories%5B%5D=8&types%5B%5D=34&types%5B%5D=30&types%5B%5D=1&types%5B%5D=2&types%5B%5D=3&types%5B%5D=4&types%5B%5D=5&types%5B%5D=6&types%5B%5D=33&types%5B%5D=7&types%5B%5D=8&types%5B%5D=9&types%5B%5D=10&types%5B%5D=19&types%5B%5D=14&types%5B%5D=16&types%5B%5D=17&types%5B%5D=18&types%5B%5D=11&types%5B%5D=20&types%5B%5D=21&types%5B%5D=22&types%5B%5D=12&types%5B%5D=13&types%5B%5D=23&types%5B%5D=24&types%5B%5D=25&types%5B%5D=26&types%5B%5D=27&types%5B%5D=28&types%5B%5D=29&types%5B%5D=31&types%5B%5D=32&types%5B%5D=35&types%5B%5D=15&types%5B%5D=36&types%5B%5D=37&resolutions%5B%5D=1&resolutions%5B%5D=2&resolutions%5B%5D=3&resolutions%5B%5D=4&resolutions%5B%5D=5&resolutions%5B%5D=6&resolutions%5B%5D=7&resolutions%5B%5D=8&resolutions%5B%5D=9&resolutions%5B%5D=10&resolutions%5B%5D=11&language_codes%5B%5D=gb&language_codes%5B%5D=dk&language_codes%5B%5D=xx&language_codes%5B%5D=se&language_codes%5B%5D=no&language_codes%5B%5D=fi&language_codes%5B%5D=jp&language_codes%5B%5D=fr&language_codes%5B%5D=es&language_codes%5B%5D=de&language_codes%5B%5D=po&language_codes%5B%5D=kr&language_codes%5B%5D=is&language_codes%5B%5D=it&language_codes%5B%5D=pt&language_codes%5B%5D=ru&language_codes%5B%5D=cn&language_codes%5B%5D=nl&language_codes%5B%5D=ae&language_codes%5B%5D=in&language_codes%5B%5D=tu&language_codes%5B%5D=th&language_codes%5B%5D=gr&language_codes%5B%5D=ro&language_codes%5B%5D=ba&language_codes%5B%5D=id&language_codes%5B%5D=hu&language_codes%5B%5D=ir&language_codes%5B%5D=ua&language_codes_subs%5B%5D=gb&language_codes_subs%5B%5D=dk&language_codes_subs%5B%5D=xx&language_codes_subs%5B%5D=se&language_codes_subs%5B%5D=no&language_codes_subs%5B%5D=fi&language_codes_subs%5B%5D=jp&language_codes_subs%5B%5D=fr&language_codes_subs%5B%5D=es&language_codes_subs%5B%5D=de&language_codes_subs%5B%5D=po&language_codes_subs%5B%5D=kr&language_codes_subs%5B%5D=is&language_codes_subs%5B%5D=it&language_codes_subs%5B%5D=pt&language_codes_subs%5B%5D=ru&language_codes_subs%5B%5D=cn&language_codes_subs%5B%5D=nl&language_codes_subs%5B%5D=ae&language_codes_subs%5B%5D=in&language_codes_subs%5B%5D=tu&language_codes_subs%5B%5D=th&language_codes_subs%5B%5D=gr&language_codes_subs%5B%5D=ro&language_codes_subs%5B%5D=ba&language_codes_subs%5B%5D=id&language_codes_subs%5B%5D=hu&language_codes_subs%5B%5D=ir&language_codes_subs%5B%5D=ua&page={page_num}&qty=100"
-
-            response = self._make_request(req_url)
+            search_url = f"{self.url}/torrents/filter?_token={self.csrf_token}&search={query}&page={page_num}&qty=100{category_param}"
+            response = self._make_request(search_url)
             search_results = json.loads(response)
 
-            torrent_num = self._process_search_results(search_results)
+            self._process_search_results(search_results)
 
-            if torrent_num < 100:
+            if len(search_results['torrents']) < 100:
                 break
-
 
 if __name__ == "__main__":
     # For testing purposes
     a = danishbytes()
-    a.search('hello')
+    a.search('the', cat="tv")
