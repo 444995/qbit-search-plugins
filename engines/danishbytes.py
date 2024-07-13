@@ -1,7 +1,5 @@
-#####################################################################################
-#   AUTHOR: github.com/444995 - the code will improve and get updated               #
-#   VERSION: 1.02                                                                   #
-#####################################################################################
+# VERSION: 1.3                                                                    #
+# AUTHOR: github.com/444995 - the code will improve and get updated               #
 
 
 ###########################   LICENSING INFORMATION   ###############################
@@ -30,60 +28,25 @@
 PRIVATE_USERNAME = "REPLACE_ME"                           # A DANISHBYTES ACCOUNT HAS A PRIVATE USERNAME
 PUBLIC_USERNAME = "REPLACE_ME"                            # AND A PUBLIC USERNAME
 PASSWORD = "REPLACE_ME"                                   # YOU ALSO NEED A PASSWORD
-CACHE_LOGIN = True                                        # THIS IS TO CACHE THE LOGIN SESSION, SO YOU DON'T HAVE TO LOGIN EVERY TIME
-LOGIN_SESSION_FILENAME = "danishbytes.pkl"                # THE PATH TO THE LOGIN SESSION FILE
+CACHE_LOGIN_COOKIES = True                                # CACHE COOKIES  (RECOMMENDED)
+COOKIES_FILE_NAME = "danishbytes.cookies"                 # THE PATH TO THE LOGIN 
 
 # ----------------IMPORTS-------------------------------- #
 
 import os
-import pickle
-import urllib.request
+import json
+import gzip
 import urllib.parse
-import requests
+import urllib.request
 from bs4 import BeautifulSoup
+import http.cookiejar as cookielib
+from urllib.error import HTTPError
 
 # ----------------CODE----------------------------------- #
 
-class SessionCacheManager:
-    """
-    Manages the session cache.
-    """
-    def __init__(self, login_session_filepath):
-        self.login_session_filepath = login_session_filepath
-
-    def write_login_cache_to_file(self, session):
-        """
-        Writes the session cache to a file.
-        """
-        with open(self.login_session_filepath, 'wb') as file:
-            pickle.dump(session.cookies, file)
-        
-    def read_login_cache_from_file(self):
-        """
-        Reads the session cache from a file.
-        """
-        with open(self.login_session_filepath, 'rb') as file:
-            session = requests.Session()
-            session.cookies.update(pickle.load(file))
-            return session
-
-    def cache_exists(self):
-        """
-        Checks if the cache exists.
-        """
-        return os.path.exists(self.login_session_filepath)
-
-    def remove_cache(self):
-        """
-        Removes the cache.
-        """
-        if self.cache_exists():
-            os.remove(self.login_session_filepath)
-
-
 class HtmlExtractor:
     """
-    Extracts content from HTML.
+    Extracts both content from HTML and cookies from responses.
     """
     @staticmethod
     def extract_meta_content(soup, name):
@@ -109,14 +72,6 @@ class HtmlExtractor:
         
         return dynamic_name, dynamic_value
 
-    @staticmethod
-    def fetch_specific_cookie(response, cookie_name):
-        """
-        Fetches the specific cookie from the response headers.
-        """
-        return str(response.headers).split(f"{cookie_name}=")[1].split(";")[0]
-        
-
 
 class danishbytes(object):
     """
@@ -125,6 +80,8 @@ class danishbytes(object):
 
     url = 'https://danishbytes.club'
     name = 'DanishBytes'
+    user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0'
+
     # categories will get implemented
     supported_categories = {
         'all': '0',
@@ -142,103 +99,115 @@ class danishbytes(object):
         """
         self.site_url = danishbytes.url
         self.login_url = f"{self.site_url}/login"
-        self.tracker_urls = ["https://danishbytes2.org/announce", "https://dbytes.org/announce", "https://danishbytes.club/announce"]
-        self.user_agent = "Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0"
+        self.tracker_urls = [
+            "https://danishbytes2.org/announce", 
+            "https://dbytes.org/announce", 
+            "https://danishbytes.club/announce"
+        ]
         
         self.cur_dir = os.path.dirname(os.path.realpath(__file__))
-        self.login_session_path = os.path.join(self.cur_dir, LOGIN_SESSION_FILENAME)
-
+        self.cookies_file_path = os.path.join(self.cur_dir, COOKIES_FILE_NAME)
 
         self.html_extractor = HtmlExtractor()
-        self.session_cache_manager = SessionCacheManager(login_session_filepath=self.login_session_path)
 
-        self.session = self._fetch_session()
+        self.opener = self._create_opener()
+        self._set_cookies()
         self.csrf_token = self._verify_login()
 
-    def _fetch_session(self):
-        """
-        Fetches the session from the cache or logs in and returns the session.
-        """
-        if CACHE_LOGIN and self.session_cache_manager.cache_exists():
-            return self.session_cache_manager.read_login_cache_from_file()
+        if self.csrf_token is None:
+            raise Exception("Login failed, please check your credentials.")
 
-        return self._login()
+    def _create_opener(self):
+        self.cookiejar = cookielib.LWPCookieJar(self.cookies_file_path)
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookiejar))
+        opener.addheaders = [
+            ('User-Agent', danishbytes.user_agent),
+            ('Accept-Encoding', 'gzip, deflate'),
+        ]
 
+        return opener
+
+    def _make_request(self, url, data=None):
+        """
+        Makes a request to the given URL using urllib.
+        """
+        encoded_data = urllib.parse.urlencode(data).encode() if data else None
+        try:
+            with self.opener.open(url, encoded_data or None) as response:
+                if response.info().get('Content-Encoding') == 'gzip':
+                    buffer = gzip.GzipFile(fileobj=response)
+                    content = buffer.read()
+                else:
+                    content = response.read()
+                return content
+
+        except HTTPError as e:
+            request_type = "POST" if data else "GET"
+            raise Exception(f"HTTP {request_type} request to '{url}' failed with status: {e.code} - probably login failure")
+            
+    def _set_cookies(self):
+        """
+        Fetches the cookies from the cookies file if it exists, otherwise logs in.
+        """
+        if CACHE_LOGIN_COOKIES and os.path.exists(self.cookies_file_path):
+            self.cookiejar.load(
+                self.cookies_file_path,
+                ignore_discard=True, 
+                ignore_expires=True
+            )
+        else:
+            self._login()
 
     def _login(self):
         """
-        Logs into DanishBytes and returns the session.
+        Logs into DanishBytes; this automatically sets the cookies in the cookiejar
+            hence why cookies aren't returned
         """
-        # initial request to get the db_session cookie
-        response = requests.get(self.site_url, allow_redirects=False)
-        initial_db_session = self.html_extractor.fetch_specific_cookie(response, "db_session")
-
-        # make a request to the login page so we can get the csrf token, captcha key, dynamic name, dynamic value, xsrf toke and db_session cookie
-        response = requests.get(
-            self.login_url, 
-            headers={
-                'cookie': f'db_session={initial_db_session}', 
-                'user-agent': self.user_agent
-            }, 
-            allow_redirects=False
-        )
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # fetch the db_session cookie from response headers
-        _db_session = self.html_extractor.fetch_specific_cookie(response, "db_session")
-        _xsrf_token = self.html_extractor.fetch_specific_cookie(response, "XSRF-TOKEN")
-
+        # initial request to get cookies and keys
+        response = self._make_request(self.login_url)
+ 
         # fetch the csrf token, captcha key, dynamic name and value from the soup object
+        soup = BeautifulSoup(response, "html.parser")
         _csrf_token = self.html_extractor.extract_meta_content(soup, "csrf-token")
         _captcha_key = self.html_extractor.extract_input_value(soup, "_captcha")
         _username = self.html_extractor.extract_input_value(soup, "_username")
         _dynamic_name, _dynamic_value = self.html_extractor.extract_dynamic_name_and_value(soup)
 
-        
-        # payload for the login request
-        payload = {
-            "_token": _csrf_token,
-            "private_username": PRIVATE_USERNAME,
-            "username": PUBLIC_USERNAME,
-            "password": PASSWORD,
-            "remember": "on",
-            "_captcha": _captcha_key,
-            "_username": _username,
-            _dynamic_name: _dynamic_value
-        }
-        
-        # session so we can use it later without having to login each time
-        session = requests.Session()
-        session.post(
+
+        # login request
+        self._make_request(
             self.login_url, 
-            headers={
-                'content-type': 'application/x-www-form-urlencoded', 
-                'cookie': f'XSRF-TOKEN={_xsrf_token}; db_session={_db_session}', 
-                'user-agent': self.user_agent
-            }, 
-            data=urllib.parse.urlencode(payload), 
-            allow_redirects=True,
+            data = { 
+                "_token": _csrf_token,
+                "private_username": PRIVATE_USERNAME,
+                "username": PUBLIC_USERNAME,
+                "password": PASSWORD,
+                "remember": "on",
+                "_captcha": _captcha_key,
+                "_username": _username,
+                _dynamic_name: _dynamic_value
+            }
         )
-
-        if CACHE_LOGIN:
-            self.session_cache_manager.write_login_cache_to_file(session)
-        
-        return session
-
+ 
+        if CACHE_LOGIN_COOKIES:
+            self.cookiejar.save(
+                self.cookies_file_path, 
+                ignore_discard=True, 
+                ignore_expires=True
+            )
 
     def _verify_login(self):
         """
         Verifies the login by checking if the csrf token is present in the site's main page.
         """
-        response = self.session.get(self.site_url, allow_redirects=False)
-        soup = BeautifulSoup(response.text, "html.parser")
+        response = self._make_request(self.site_url)
+        soup = BeautifulSoup(response, "html.parser")
         csrf_token = self.html_extractor.extract_meta_content(soup, "csrf-token")
 
-        # if the csrf token is None, it means the login failed, so we remove the login session file
+        # if the csrf token is None, it means the login failed, so we remove the cookies file
         # so we can allow the user to login again with a new session
-        if csrf_token is None:
-            self.session_cache_manager.remove_cache()
+        if csrf_token is None and os.path.exists(self.cookies_file_path):
+            os.remove(self.cookies_file_path)
 
         return csrf_token
 
@@ -286,9 +255,6 @@ class danishbytes(object):
         """
         Searches for torrents on DanishBytes.
         """
-        if self.csrf_token is None:
-            raise Exception("Your login to DanishBytes failed. Please check your credentials and try again.")
-
 
         page_num = 0
         while True:
@@ -296,13 +262,13 @@ class danishbytes(object):
 
             req_url = f"{self.site_url}/torrents/filter?_token={self.csrf_token}&search={what}&search_not=&uploader=&imdb=&tvdb=&view=list&tmdb=&mal=&igdb=&size_min=0&size_max=0&year_min=&year_max=&categories%5B%5D=1&categories%5B%5D=2&categories%5B%5D=5&categories%5B%5D=4&categories%5B%5D=3&categories%5B%5D=8&types%5B%5D=34&types%5B%5D=30&types%5B%5D=1&types%5B%5D=2&types%5B%5D=3&types%5B%5D=4&types%5B%5D=5&types%5B%5D=6&types%5B%5D=33&types%5B%5D=7&types%5B%5D=8&types%5B%5D=9&types%5B%5D=10&types%5B%5D=19&types%5B%5D=14&types%5B%5D=16&types%5B%5D=17&types%5B%5D=18&types%5B%5D=11&types%5B%5D=20&types%5B%5D=21&types%5B%5D=22&types%5B%5D=12&types%5B%5D=13&types%5B%5D=23&types%5B%5D=24&types%5B%5D=25&types%5B%5D=26&types%5B%5D=27&types%5B%5D=28&types%5B%5D=29&types%5B%5D=31&types%5B%5D=32&types%5B%5D=35&types%5B%5D=15&types%5B%5D=36&types%5B%5D=37&resolutions%5B%5D=1&resolutions%5B%5D=2&resolutions%5B%5D=3&resolutions%5B%5D=4&resolutions%5B%5D=5&resolutions%5B%5D=6&resolutions%5B%5D=7&resolutions%5B%5D=8&resolutions%5B%5D=9&resolutions%5B%5D=10&resolutions%5B%5D=11&language_codes%5B%5D=gb&language_codes%5B%5D=dk&language_codes%5B%5D=xx&language_codes%5B%5D=se&language_codes%5B%5D=no&language_codes%5B%5D=fi&language_codes%5B%5D=jp&language_codes%5B%5D=fr&language_codes%5B%5D=es&language_codes%5B%5D=de&language_codes%5B%5D=po&language_codes%5B%5D=kr&language_codes%5B%5D=is&language_codes%5B%5D=it&language_codes%5B%5D=pt&language_codes%5B%5D=ru&language_codes%5B%5D=cn&language_codes%5B%5D=nl&language_codes%5B%5D=ae&language_codes%5B%5D=in&language_codes%5B%5D=tu&language_codes%5B%5D=th&language_codes%5B%5D=gr&language_codes%5B%5D=ro&language_codes%5B%5D=ba&language_codes%5B%5D=id&language_codes%5B%5D=hu&language_codes%5B%5D=ir&language_codes%5B%5D=ua&language_codes_subs%5B%5D=gb&language_codes_subs%5B%5D=dk&language_codes_subs%5B%5D=xx&language_codes_subs%5B%5D=se&language_codes_subs%5B%5D=no&language_codes_subs%5B%5D=fi&language_codes_subs%5B%5D=jp&language_codes_subs%5B%5D=fr&language_codes_subs%5B%5D=es&language_codes_subs%5B%5D=de&language_codes_subs%5B%5D=po&language_codes_subs%5B%5D=kr&language_codes_subs%5B%5D=is&language_codes_subs%5B%5D=it&language_codes_subs%5B%5D=pt&language_codes_subs%5B%5D=ru&language_codes_subs%5B%5D=cn&language_codes_subs%5B%5D=nl&language_codes_subs%5B%5D=ae&language_codes_subs%5B%5D=in&language_codes_subs%5B%5D=tu&language_codes_subs%5B%5D=th&language_codes_subs%5B%5D=gr&language_codes_subs%5B%5D=ro&language_codes_subs%5B%5D=ba&language_codes_subs%5B%5D=id&language_codes_subs%5B%5D=hu&language_codes_subs%5B%5D=ir&language_codes_subs%5B%5D=ua&page={page_num}&qty=100"
 
-            search_results = self.session.get(req_url).json()
+            response = self._make_request(req_url)
+            search_results = json.loads(response)
 
             torrent_num = self._process_search_results(search_results)
 
             if torrent_num < 100:
                 break
-
 
 
 if __name__ == "__main__":
