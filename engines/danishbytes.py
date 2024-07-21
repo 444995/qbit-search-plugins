@@ -1,49 +1,47 @@
-# VERSION: 1.3                                                                    #
-# AUTHOR: github.com/444995 - updates will come                                   #
+# VERSION: 1.40
+# AUTHOR: github.com/444995
+# WILL GET UPDATED IF BROKEN
 
+# MIT License
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.                 
 
-###########################   LICENSING INFORMATION   ###############################
-#   Permission is hereby granted, free of charge, to any person obtaining a copy    #
-#   of this software and associated documentation files (the "Software"), to deal   #
-#   in the Software without restriction, including without limitation the rights    #
-#   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell       #
-#   copies of the Software, and to permit persons to whom the Software is           #
-#   furnished to do so, subject to the following conditions:                        #
-#                                                                                   #
-#   The above copyright notice and this permission notice shall be included in      #
-#   all copies or substantial portions of the Software.                             #
-#                                                                                   #                                    
-#   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR      #
-#   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,        #
-#   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE     #
-#   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER          #
-#   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,   #
-#   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE   #
-#   SOFTWARE.                                                                       #
-#####################################################################################
+# USER SETTINGS
+PRIVATE_USERNAME = "REPLACE_ME"           # A DANISHBYTES ACCOUNT HAS A PRIVATE USERNAME
+PUBLIC_USERNAME = "REPLACE_ME"            # AND A PUBLIC USERNAME
+PASSWORD = "REPLACE_ME"                   # YOU ALSO NEED A PASSWORD
+CACHE_LOGIN_COOKIES = True                # CACHE COOKIES (HIGHLY RECOMMENDED)
+COOKIES_FILE_NAME = "danishbytes.cookies" # THE PATH TO THE LOGIN
+USE_MAGNET_URLS = False                   # USES MAGNET LINKS OR TORRENT FILES DEPENDING ON TRUE/FALSE (FALSE IS RECOMMENDED)
 
-
-# ----------------USER SETTINGS-------------------------- #
-
-PRIVATE_USERNAME = "REPLACE_ME"                           # A DANISHBYTES ACCOUNT HAS A PRIVATE USERNAME
-PUBLIC_USERNAME = "REPLACE_ME"                            # AND A PUBLIC USERNAME
-PASSWORD = "REPLACE_ME"                                   # YOU ALSO NEED A PASSWORD
-CACHE_LOGIN_COOKIES = True                                # CACHE COOKIES (HIGHLY RECOMMENDED)
-COOKIES_FILE_NAME = "danishbytes.cookies"                 # THE PATH TO THE LOGIN 
-
-# ----------------IMPORTS-------------------------------- #
-
+# IMPORTS
 import os
 import json
 import gzip
+import tempfile
 import urllib.parse
 import urllib.request
-from bs4 import BeautifulSoup
 import http.cookiejar as cookielib
 from urllib.error import HTTPError
+from bs4 import BeautifulSoup
+from novaprinter import prettyPrinter
 
-# ----------------CODE----------------------------------- #
-
+# CODE
 class HtmlExtractor:
     """
     Extracts needed keys and tokens from a given HTML response.
@@ -59,27 +57,25 @@ class HtmlExtractor:
         """Extracts value from input tag with the given name."""
         tag = soup.find("input", {"name": name})
         return tag["value"].strip() if tag else None
-
+    
     @staticmethod
-    def extract_dynamic_name_and_value(soup): # should probably get refactored
-        """Extracts dynamic input name and value after the username input."""
-        dynamic_name, dynamic_value = None, None
-        for i, element in enumerate(soup.find_all("input", {"name": True, "value": True})):
-            name = element["name"]
-            if name == "_username":
-                dynamic_name = soup.find_all("input", {"name": True, "value": True})[i+1]["name"]
-                dynamic_value = soup.find_all("input", {"name": True, "value": True})[i+1]["value"]
-        
-        return dynamic_name, dynamic_value
-
+    def extract_attr(soup, attr_name, num=-1):
+        """Extracts the attribute value from the input tag with the given number."""
+        return soup.find_all("input")[num][attr_name]
 
 class danishbytes(object):
     """
     DanishBytes engine for qBittorrent.
     """
-
-    url = 'https://danishbytes.club'
     name = 'DanishBytes'
+    url = 'https://danishbytes.club'
+    login_url = f"{url}/login"
+    tracker_urls = [
+        "https://danishbytes2.org/announce", 
+        "https://dbytes.org/announce", 
+        "https://danishbytes.club/announce"
+    ]
+    categories_string = "&categories%5B%5D="
     user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0'
 
     supported_categories = {
@@ -96,186 +92,153 @@ class danishbytes(object):
         """
         Initializes the DanishBytes engine for qBittorrent.
         """
-        self.login_url = f"{self.url}/login"
-        self.tracker_urls = [
-            "https://danishbytes2.org/announce", 
-            "https://dbytes.org/announce", 
-            "https://danishbytes.club/announce"
-        ]
-        self.categories_string = "&categories%5B%5D="
-        
-        self.cur_dir = os.path.dirname(os.path.realpath(__file__))
-        self.cookies_file_path = os.path.join(self.cur_dir, COOKIES_FILE_NAME)
-
+        self.cookies_file_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), 
+            COOKIES_FILE_NAME
+        )
         self.html_extractor = HtmlExtractor()
-
-        self.opener = self._create_opener()
-        self._set_cookies()
-        self.csrf_token = self._verify_login()
-
-        if self.csrf_token is None:
-            raise Exception("Login failed, please check your credentials.")
-
-    def _create_opener(self):
         self.cookiejar = cookielib.LWPCookieJar(self.cookies_file_path)
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookiejar))
-        opener.addheaders = [
-            ('User-Agent', danishbytes.user_agent),
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookiejar))
+        self.opener.addheaders = [
+            ('User-Agent', self.user_agent),
             ('Accept-Encoding', 'gzip, deflate'),
         ]
 
-        return opener
-
-    def _make_request(self, url, data=None):
-        """
-        Makes a request to the given URL using urllib.
-        """
-        encoded_data = urllib.parse.urlencode(data).encode() if data else None
-        try:
-            with self.opener.open(url, encoded_data or None) as response:
-                if response.info().get('Content-Encoding') == 'gzip':
-                    buffer = gzip.GzipFile(fileobj=response)
-                    content = buffer.read()
-                else:
-                    content = response.read()
-                return content
-
-        except HTTPError as e:
-            request_type = "POST" if data else "GET"
-            raise Exception(f"HTTP {request_type} request to '{url}' failed with status: {e.code} - probably login failure")
-            
-    def _set_cookies(self):
-        """
-        Fetches the cookies from the cookies file if it exists, otherwise logs in.
-        """
         if CACHE_LOGIN_COOKIES and os.path.exists(self.cookies_file_path):
             self.cookiejar.load(
                 self.cookies_file_path,
-                ignore_discard=True, 
+                ignore_discard=True,
                 ignore_expires=True
             )
         else:
             self._login()
 
+        self._set_csrf_token()
+
     def _login(self):
         """
         Logs into DanishBytes; this automatically sets the cookies in the cookiejar
-            hence why cookies aren't returned
+        when self.opener is used hence why cookies aren't returned
         """
         # initial request to get cookies and keys
         response = self._make_request(self.login_url)
- 
-        # fetch the csrf token, captcha key, dynamic name and value from the soup object
         soup = BeautifulSoup(response, "html.parser")
-        _csrf_token = self.html_extractor.extract_meta_content(soup, "csrf-token")
-        _captcha_key = self.html_extractor.extract_input_value(soup, "_captcha")
-        _username = self.html_extractor.extract_input_value(soup, "_username")
-        _dynamic_name, _dynamic_value = self.html_extractor.extract_dynamic_name_and_value(soup)
+        
+        payload = { 
+            "_token": self.html_extractor.extract_meta_content(soup, "csrf-token"),
+            "private_username": PRIVATE_USERNAME,
+            "username": PUBLIC_USERNAME,
+            "password": PASSWORD,
+            "remember": "on",
+            "_captcha": self.html_extractor.extract_input_value(soup, "_captcha"),
+            "_username": self.html_extractor.extract_input_value(soup, "_username"),
+            self.html_extractor.extract_attr(soup, "name"): self.html_extractor.extract_attr(soup, "value")
+        }
+        
+        try:
+            self._make_request(self.login_url, data=payload)
+        except HTTPError as e:
+            raise Exception(f"Login failed with error code: {e.code}") from e
 
-
-        # login request
-        self._make_request(
-            self.login_url, 
-            data = { 
-                "_token": _csrf_token,
-                "private_username": PRIVATE_USERNAME,
-                "username": PUBLIC_USERNAME,
-                "password": PASSWORD,
-                "remember": "on",
-                "_captcha": _captcha_key,
-                "_username": _username,
-                _dynamic_name: _dynamic_value
-            }
-        )
- 
         if CACHE_LOGIN_COOKIES:
             self.cookiejar.save(
                 self.cookies_file_path, 
                 ignore_discard=True, 
                 ignore_expires=True
             )
-
-    def _verify_login(self):
-        """
-        Verifies the login by checking if the csrf token is present in the site's main page.
-        """
-        response = self._make_request(self.url)
-        soup = BeautifulSoup(response, "html.parser")
-        csrf_token = self.html_extractor.extract_meta_content(soup, "csrf-token")
-
-        # if the csrf token is None, it means the login failed, so we remove the cookies file
-        # so we can allow the user to login again with a new session
-        if csrf_token is None and os.path.exists(self.cookies_file_path):
-            os.remove(self.cookies_file_path)
-
-        return csrf_token
-
+    
     def download_torrent(self, info):
-        # will be implemented later
-        pass
-
-    def _process_search_results(self, search_results):
         """
-        Processes search results and prints them.
+        Downloads the torrent file
         """
-        # these shouldnt be defined each time, but for now it's fine
-        rss_key = search_results['rsskey'] 
-        pass_key = search_results['passkey']
-
-        def _make_magnet_url(torrent):
-            magnet_url = "magnet:?"
-            magnet_url += f"dn={torrent['name']}&"
-            magnet_url += f"xt=urn:btih:{torrent['info_hash']}&"
-            magnet_url += f"as={self.url}/torrent/download/{torrent['id']}.{rss_key}&"
-            magnet_url += f"xl={torrent['size']}&"
-            for tracker in self.tracker_urls:
-                magnet_url += f"tr={tracker}/{pass_key}&"
-
-            return magnet_url[:-1]
+        torrent_file = self._make_request(info)
+        with tempfile.NamedTemporaryFile(suffix='.torrent', delete=False) as _file:
+            _file.write(torrent_file)
         
-        torrent_num = 0
-        for torrent in search_results['torrents']:
-            magnet_url = _make_magnet_url(torrent)
-            name = torrent['name']
-            size = torrent['size']
-            seeders = torrent['seeders']
-            leechers = torrent['leechers']
-            engine_url = self.url
-            desc_url = f"{self.url}/torrent/{torrent['id']}"
+        print(f"{_file.name} {info}")
 
-            # prettyprint isn't used because danishbytes gives size in bytes already
-            print(f"{magnet_url}|{name}|{size}|{seeders}|{leechers}|{engine_url}|{desc_url}")
-
-            torrent_num += 1
-
-        return torrent_num
-
-
-    def search(self, query, cat='all'):
+    def search(self, what, cat='all'):
         """
         Searches for torrents on DanishBytes.
         """
-        if cat not in self.supported_categories:
-            raise ValueError("Unsupported category")
-        
-        if cat == 'all':
-            category_param = ''.join([self.categories_string + cat for cat in self.supported_categories.values()])
-        else:
-            category_param = self.categories_string + self.supported_categories[cat]
+        category_param = self._get_category_param(cat)
+        page_num = 1
 
-        page_num = 0
         while True:
-            page_num += 1
-            search_url = f"{self.url}/torrents/filter?_token={self.csrf_token}&search={query}&page={page_num}&qty=100{category_param}"
-            response = self._make_request(search_url)
-            search_results = json.loads(response)
-
-            self._process_search_results(search_results)
-
-            if len(search_results['torrents']) < 100:
+            torrent_count = self._search_page(what, page_num, category_param)
+            if torrent_count < 100:
                 break
+            page_num += 1
+
+    def _get_category_param(self, cat):
+        """
+        Constructs the category parameter string for the search URL.
+        """
+        if cat == 'all':
+            return ''.join([self.categories_string + c for c in self.supported_categories.values()])
+        return self.categories_string + self.supported_categories[cat]
+
+    def _search_page(self, what, page_num, category_param):
+        """
+        Handles a single page of search results.
+        """
+        search_url = f"{self.url}/torrents/filter?_token={self.csrf_token}&search={what}&page={page_num}&qty=100{category_param}"
+        response = self._make_request(search_url)
+        search_results = json.loads(response)
+
+        for torrent in search_results['torrents']:
+            self._print_torrent(torrent, search_results['rsskey'], search_results['passkey'])
+
+        return len(search_results['torrents'])
+
+    def _make_request(self, url, data=None):
+        """
+        Makes a request to the given URL using urllib.
+        """
+        encoded_data = urllib.parse.urlencode(data).encode() if data else None
+        with self.opener.open(url, encoded_data or None) as response:
+            content = gzip.GzipFile(fileobj=response).read() if response.info().get('Content-Encoding') == 'gzip' else response.read()
+            return content
+
+    def _print_torrent(self, torrent, rss_key, pass_key):
+        """
+        Prints a single torrent's details.
+        """
+        _link = self._make_magnet_url(torrent, rss_key, pass_key) if USE_MAGNET_URLS else f"{self.url}/torrents/download/{torrent['id']}"
+        prettyPrinter({
+            'link': _link,
+            'name': torrent['name'],
+            'size': f"{str(torrent['size'])} B",
+            'seeds': torrent['seeders'],
+            'leech': torrent['leechers'],
+            'engine_url': self.url,
+            'desc_link': f"{self.url}/torrents/{torrent['id']}"
+        })
+
+    def _make_magnet_url(self, torrent, rss_key, pass_key):
+        """
+        Constructs the magnet URL for a torrent.
+        """
+        magnet_url = "magnet:?"
+        magnet_url += f"dn={torrent['name']}&"
+        magnet_url += f"xt=urn:btih:{torrent['info_hash']}&"
+        magnet_url += f"as={self.url}/torrent/download/{torrent['id']}.{rss_key}&"
+        magnet_url += f"xl={torrent['size']}&"
+        for tracker in self.tracker_urls:
+            magnet_url += f"tr={tracker}/{pass_key}&"
+        return magnet_url[:-1]
+
+    def _set_csrf_token(self):
+        """
+        Sets the CSRF token for the current session, so it can be used for search requests.
+        """
+        response = self._make_request(self.url)
+        soup = BeautifulSoup(response, "html.parser")
+        self.csrf_token = self.html_extractor.extract_meta_content(soup, "csrf-token")
+
 
 if __name__ == "__main__":
     # For testing purposes
-    a = danishbytes()
-    a.search('the', cat="tv")
+    db = danishbytes()
+    db.search("hello", "all")
+    db.download_torrent("https://danishbytes.club/torrents/download/25600")
