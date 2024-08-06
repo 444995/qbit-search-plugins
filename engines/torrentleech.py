@@ -38,7 +38,7 @@ class torrentleech(object):
 
     def __init__(self):
         self.login_url = f"{self.url}/user/account/login/"
-        self.torrents_per_page = 100
+        self.torrents_per_page = 50
         self.cookiejar = cookielib.LWPCookieJar()
         self.opener = self._create_opener()
         self._login()
