@@ -1,19 +1,20 @@
-# VERSION: 1.0
+# VERSION: 1.1
 # AUTHORS: github.com/444995
+# Not the best code I've written, will prob get updated
 
 import tempfile
 import urllib.parse
 from urllib.error import HTTPError
 from bs4 import BeautifulSoup
 import gzip
-from helpers import retrieve_url
 from novaprinter import prettyPrinter
 import http.cookiejar as cookielib
+import re
 
 # EVEN IF THIS IS SET TO FALSE
 # IT STILL FALLS BACK TO MAGNET LINKS 
 # IF A TORRENT FILE IS NOT AVAILABLE
-USE_MAGNET_LINKS = False
+USE_MAGNET_LINKS = False # FALSE IS RECOMMENDED
 
 class zooqle(object):
     url = 'https://zooqle.skin'
@@ -22,12 +23,21 @@ class zooqle(object):
     # Categories are not supported on the site in the way
     # that you can use a query and a category for searching
     supported_categories = {
-        'all': "0"
+        'all': '0', 
+        'anime': 'anime',
+        'movies': 'movies', 
+        'tv': 'tv', 
+        'music': 'music',
+        'games': 'games', 
+        'software': 'apps',
+        'books': None,
     }
-
     search_url = f"{url}/search/"
     download_url = f"{url}/torfile/"
     torrent_page_url = f'{url}/torrent-page/'
+
+    category_pattern = r'<li><a href="javascript:void\(\);" onclick="p([^"]+)\.submit\(\)" style="[^"]*">([^<]+)</a></li>'
+
 
     def __init__(self):
         self.torrents_per_page = 40
@@ -42,10 +52,17 @@ class zooqle(object):
         ]
         return opener
 
-    def _make_request(self, url, data=None, return_as_soup=False):
+
+    def _make_request(self, url, data=None, return_as_soup=False, extra_headers=None):
         try:
             encoded_data = urllib.parse.urlencode(data).encode() if data else None
-            with self.opener.open(url, encoded_data) as response:
+            request = urllib.request.Request(url, encoded_data)
+            
+            if extra_headers:
+                for key, value in extra_headers.items():
+                    request.add_header(key, value)
+            
+            with self.opener.open(request) as response:
                 if response.info().get('Content-Encoding') == 'gzip':
                     content = gzip.decompress(response.read())
                 else:
@@ -69,8 +86,9 @@ class zooqle(object):
             file.write(torrent_file)
         print(f"{file.name} {self.download_url}")
 
-    def search(self, what, _):
+    def search(self, what, cat='all'):
         what = urllib.parse.quote(what)
+        category = self._establish_category_url(cat)
         
         page_num = 1
         while True:
@@ -78,29 +96,34 @@ class zooqle(object):
                 url=f"{self.url}/query/{what}/page/{page_num}",
                 data={'q': what,
                       'page': page_num},
+                extra_headers={
+                    "referer": f'https://zooqle.skin/category/{category}/'
+                } if category != '0' else {},
                 return_as_soup=True
             )
 
-            num_results = self._parse_results(response)
+            num_results = self._parse_results(response, category)
 
             if num_results < self.torrents_per_page:
                 return
             
             page_num += 1
+    
+    def _establish_category_url(self, category):
+        return self.supported_categories[category]
 
-    def _parse_results(self, soup):
+    def _parse_results(self, soup, category):
         rows = soup.find_all('tr')
-
         torrents_found = 0
         for row in rows:
-            torrent_data = self._extract_torrent_data(row)
+            torrent_data = self._extract_torrent_data(row, category)
             if torrent_data:
                 prettyPrinter(torrent_data)
                 torrents_found += 1
 
         return torrents_found
     
-    def _extract_torrent_data(self, row):
+    def _extract_torrent_data(self, row, category):
         name_elem = row.find('a', onclick=lambda x: x and x.startswith('t9mov'))
         if not name_elem:
             return None
@@ -113,8 +136,14 @@ class zooqle(object):
         torrent_id = id_input['value'] if id_input else None
         if not torrent_id:
             return None
-
+        
         torrent_page = self._get_torrent_page(torrent_id)
+
+        if category != '0':
+            category_elem = re.search(self.category_pattern, str(torrent_page)).group(2)
+
+            if category_elem.lower() != category:
+                return None
 
         return {
             'name': name_elem.get_text(strip=True),
@@ -166,4 +195,4 @@ class zooqle(object):
 
 if __name__ == "__main__":
     engine = zooqle()
-    engine.search("hey")
+    engine.search("the", "anime")
