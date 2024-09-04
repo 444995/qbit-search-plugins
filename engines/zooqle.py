@@ -2,14 +2,13 @@
 # AUTHORS: github.com/444995
 # Not the best code I've written, will prob get updated
 
+import re
+import gzip
 import tempfile
 import urllib.parse
 from urllib.error import HTTPError
-from bs4 import BeautifulSoup
-import gzip
-from novaprinter import prettyPrinter
 import http.cookiejar as cookielib
-import re
+from novaprinter import prettyPrinter
 
 # EVEN IF THIS IS SET TO FALSE
 # IT STILL FALLS BACK TO MAGNET LINKS 
@@ -20,8 +19,6 @@ class zooqle(object):
     url = 'https://zooqle.skin'
     name = 'Zooqle'
 
-    # Categories are not supported on the site in the way
-    # that you can use a query and a category for searching
     supported_categories = {
         'all': '0', 
         'anime': 'anime',
@@ -36,8 +33,18 @@ class zooqle(object):
     download_url = f"{url}/torfile/"
     torrent_page_url = f'{url}/torrent-page/'
 
-    category_pattern = r'<li><a href="javascript:void\(\);" onclick="p([^"]+)\.submit\(\)" style="[^"]*">([^<]+)</a></li>'
-
+    PATTERNS = {
+        'category': r'<li><a href="javascript:void\(\);" onclick="p([^"]+)\.submit\(\)" style="[^"]*">([^<]+)</a></li>',
+        'row': r'<tr>.*?</tr>',
+        'torrent_id': r'<input type="hidden" name="id" value="(\d+)"',
+        'name': r'<title>(.*?)\s+Torrent - Zooqle</title>',
+        'size': r'<i class="fa fa-file"></i>\s*&nbsp;\s*<strong>Size</strong>.*?</li>\s*<li>:</li>\s*<li>(.*?)</li>',
+        'seeds': r'<i class="fa fa-arrow-up"></i>\s*&nbsp;\s*<strong>Seed</strong>.*?</li>\s*<li>:</li>\s*<li[^>]*>(.*?)</li>',
+        'leech': r'<i class="fa fa-arrow-down"></i>\s*&nbsp;\s*<strong>Leech</strong>.*?</li>\s*<li>:</li>\s*<li[^>]*>(.*?)</li>',
+        'category_match': r'<i class="fa fa-tag"></i>\s*&nbsp;\s*<strong>Category</strong>.*?</li>\s*<li>:</li>\s*<li><a[^>]*>([^<]+)</a>',
+        'magnet_link': r'href="(magnet:\?xt=urn:btih:[^"]+)"',
+        'hid': r'<input type="hidden" name="hid" value="([^"]+)"'
+    }
 
     def __init__(self):
         self.torrents_per_page = 40
@@ -47,13 +54,13 @@ class zooqle(object):
     def _create_opener(self):
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookiejar))
         opener.addheaders = [
-            ('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0'),
+            ('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'),
             ('Content-Type', 'application/x-www-form-urlencoded'),
         ]
         return opener
 
 
-    def _make_request(self, url, data=None, return_as_soup=False, extra_headers=None):
+    def _make_request(self, url, data=None, extra_headers=None):
         try:
             encoded_data = urllib.parse.urlencode(data).encode() if data else None
             request = urllib.request.Request(url, encoded_data)
@@ -68,7 +75,7 @@ class zooqle(object):
                 else:
                     content = response.read()
                 
-                return content if not return_as_soup else BeautifulSoup(content, 'html.parser')
+                return content
             
         except HTTPError as e:
             raise HTTPError(f"Request failed: {e}")
@@ -84,23 +91,23 @@ class zooqle(object):
         
         with tempfile.NamedTemporaryFile(suffix='.torrent', delete=False) as file:
             file.write(torrent_file)
+
         print(f"{file.name} {self.download_url}")
 
     def search(self, what, cat='all'):
-        what = urllib.parse.quote(what)
+        formatted_what = what.replace(" ", "+")
         category = self._establish_category_url(cat)
         
         page_num = 1
         while True:
             response = self._make_request(
-                url=f"{self.url}/query/{what}/page/{page_num}",
+                url=f"{self.url}/query/{formatted_what}/page/{page_num}",
                 data={'q': what,
                       'page': page_num},
                 extra_headers={
                     "referer": f'https://zooqle.skin/category/{category}/'
                 } if category != '0' else {},
-                return_as_soup=True
-            )
+            ).decode('utf-8', errors='ignore')
 
             num_results = self._parse_results(response, category)
 
@@ -112,87 +119,80 @@ class zooqle(object):
     def _establish_category_url(self, category):
         return self.supported_categories[category]
 
-    def _parse_results(self, soup, category):
-        rows = soup.find_all('tr')
+    def _parse_results(self, html_content, category):
+        rows = re.findall(self.PATTERNS['row'], html_content, re.DOTALL)
+        
         torrents_found = 0
         for row in rows:
-            torrent_data = self._extract_torrent_data(row, category)
+            torrent_id = self._get_torrent_id(row)
+            if torrent_id is None:
+                continue
+            torrent_page = self._get_torrent_page(torrent_id)
+            torrent_data = self._extract_torrent_data(torrent_page, category)
             if torrent_data:
                 prettyPrinter(torrent_data)
+                print("\n\n")
                 torrents_found += 1
 
         return torrents_found
     
-    def _extract_torrent_data(self, row, category):
-        name_elem = row.find('a', onclick=lambda x: x and x.startswith('t9mov'))
-        if not name_elem:
-            return None
+    def _extract_torrent_data(self, torrent_page, category):
+        name_elem = re.search(self.PATTERNS['name'], torrent_page, re.DOTALL)
+        name = name_elem.group(1).strip() if name_elem else "N/A"
 
-        size_elem = row.find('td', string=lambda x: x and any(unit in x for unit in ['KB', 'MB', 'GB', 'TB']))
-        seeds_elem = row.find('td', style='font-size:13px;text-align:right; padding-right:5px')
-        leech_elem = seeds_elem.find_next_sibling('td') if seeds_elem else None
-        id_input = row.find('input', {'name': 'id'})
+        size_elem = re.search(self.PATTERNS['size'], torrent_page, re.DOTALL)
+        size = size_elem.group(1).strip() if size_elem else "N/A"
 
-        torrent_id = id_input['value'] if id_input else None
-        if not torrent_id:
-            return None
-        
-        torrent_page = self._get_torrent_page(torrent_id)
+        seeds_elem = re.search(self.PATTERNS['seeds'], torrent_page, re.DOTALL)
+        seeds = seeds_elem.group(1).strip() if seeds_elem else -1
+
+        leech_elem = re.search(self.PATTERNS['leech'], torrent_page, re.DOTALL)
+        leech = leech_elem.group(1).strip() if leech_elem else -1
 
         if category != '0':
-            category_elem = re.search(self.category_pattern, str(torrent_page)).group(2)
+            category_match = re.search(self.PATTERNS['category_match'], torrent_page, re.DOTALL).group(1).strip()
 
-            if category_elem.lower() != category:
+            if category_match.lower() != category:
                 return None
 
         return {
-            'name': name_elem.get_text(strip=True),
-            'size': size_elem.get_text(strip=True) if size_elem else 'N/A',
-            'seeds': seeds_elem.get_text(strip=True).split()[0] if seeds_elem else -1,
-            'leech': leech_elem.get_text(strip=True).split()[0] if leech_elem else -1,
+            'name': name,
+            'size': size,
+            'seeds': int(seeds) if str(seeds).isdigit() else -1,
+            'leech': int(leech) if str(leech).isdigit() else -1,
             'link': self._get_download_link(torrent_page),
-            'desc_link': self.url,  # Placeholder, as actual desc_link requires a payload post req
-            'engine_url': self.url
+            'desc_link': self.url,
+            'engine_url': self.url,
         }
+
+    def _get_torrent_id(self, row):
+        match = re.search(self.PATTERNS['torrent_id'], row)
+        return match.group(1) if match else None
 
     def _get_torrent_page(self, torrent_id):
         return self._make_request(
             self.torrent_page_url, 
             data={'id': torrent_id}, 
-            return_as_soup=True
-        )
+        ).decode('utf-8', errors='ignore')
 
     def _get_download_link(self, torrent_page):
-        download_buttons = torrent_page.find_all('div', class_='download-btn')
         magnet_link = None
         hid = None
 
-        # If a torrent file is not available
-        # we need to fetch the magnet url instead
-        for button in download_buttons:
-            # Always look for magnet link
-            magnet_anchor = button.find('a', href=lambda x: x and x.startswith('magnet:'))
-            if magnet_anchor and not magnet_link:
-                magnet_link = magnet_anchor['href']
+        magnet_match = re.search(self.PATTERNS['magnet_link'], torrent_page)
+        if magnet_match:
+            magnet_link = magnet_match.group(1)
 
-            # Look for torrent link if USE_MAGNET_LINKS is False
-            if not USE_MAGNET_LINKS:
-                torrent_form = button.find('form', {'id': 'hashid'})
-                if torrent_form:
-                    hid_input = torrent_form.find('input', {'name': 'hid'})
-                    if hid_input:
-                        hid = hid_input['value']
-                        break  # Exit loop if torrent link is found
+        if not USE_MAGNET_LINKS:
+            hid_match = re.search(self.PATTERNS['hid'], torrent_page)
+            if hid_match:
+                hid = hid_match.group(1)
 
-        # Return links based on priority
         if USE_MAGNET_LINKS or (not USE_MAGNET_LINKS and not hid):
             return magnet_link if magnet_link else 'N/A'
         else:
             return hid
-
-
-
-
+        
 if __name__ == "__main__":
     engine = zooqle()
-    engine.search("the", "anime")
+    engine.search("1080p", "all")
