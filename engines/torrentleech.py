@@ -13,8 +13,8 @@ from novaprinter import prettyPrinter
 from math import ceil
 
 # User settings
-USERNAME = "REPLACE_ME"
-PASSWORD = "REPLACE_ME"
+USERNAME = 'schaapmans'
+PASSWORD = 'c54d8e2c!'
 CACHE_LOGIN_COOKIES = True
 COOKIES_FILE_NAME = "torrentleech.cookies"
 
